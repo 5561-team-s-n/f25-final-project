@@ -1,0 +1,12 @@
+*.DS_Store
+*.html
+*.pth
+*.pyc
+*.log
+tensorboard/*
+*.weights
+*.json
+core/data/*
+core/temp.py
+*.tar
+samples/*
