@@ -1,3 +1,4 @@
+--extra-index-url https://download.pytorch.org/whl/cu130
 albumentations==2.0.8
 easydict==1.13
 einops==0.8.1
