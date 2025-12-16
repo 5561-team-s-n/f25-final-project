@@ -10,9 +10,6 @@ from pathlib import Path
 import torch.nn.functional as F
 
 def make_dir(target_dir):
-    """
-    Create dir if not exists
-    """
     if not os.path.exists(target_dir):
         os.makedirs(target_dir)
 
@@ -32,17 +29,11 @@ def print_network(model, name):
 
 
 def update_lr(lr, optimizer):
-    """
-    update learning rates
-    """
     for param_group in optimizer.param_groups:
         param_group['lr'] = lr
 
 
 def warmup_lr(init_lr, step, iter_num):
-    """
-    Warm up learning rate
-    """
     return step/iter_num*init_lr
 
 
@@ -241,3 +232,125 @@ def get_masked_local_from_global(global_sigmoid, local_sigmoid):
 	fg_mask[fg_mask==2]=1
 	fusion_sigmoid = local_sigmoid*trimap_mask+fg_mask
 	return fusion_sigmoid
+
+#MATTEFORMER helpers
+def gen_trimap(alpha, max_kernel_size=30):
+    """
+    Generate a trimap using MatteFormer's erosion method.
+    alpha: uint8 grayscale alpha matte (0-255)
+    """
+    alpha = alpha.astype(np.float32) / 255.0
+
+    # Foreground mask = alpha = 1
+    fg_mask = (alpha + 1e-5).astype(int).astype(np.uint8)
+    # Background mask = alpha = 0
+    bg_mask = (1 - alpha + 1e-5).astype(int).astype(np.uint8)
+
+    # Prebuild kernels like MatteFormer
+    kernels = [
+        cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (ks, ks))
+        for ks in range(1, max_kernel_size + 1)
+    ]
+
+    # Randomly choose kernel sizes (or fix them if deterministic behavior is preferred)
+    # Using random here as per your original script
+    fg_erode_kernel = kernels[np.random.randint(1, max_kernel_size)]
+    bg_erode_kernel = kernels[np.random.randint(1, max_kernel_size)]
+
+    fg_mask_eroded = cv2.erode(fg_mask, fg_erode_kernel)
+    bg_mask_eroded = cv2.erode(bg_mask, bg_erode_kernel)
+
+    # Create the trimap: 128 = unknown
+    trimap = np.ones_like(alpha, dtype=np.uint8) * 128
+    trimap[fg_mask_eroded == 1] = 255
+    trimap[bg_mask_eroded == 1] = 0
+
+    return trimap
+
+def matteformer_generator_tensor_dict(image, trimap):
+    """
+    Prepare dictionary for MatteFormer using in-memory Numpy arrays.
+    """
+    sample = {'image': image, 'trimap': trimap, 'alpha_shape': (image.shape[0], image.shape[1])}
+    h, w = sample["alpha_shape"]
+    
+    # Calculate Padding to multiple of 32
+    if h % 32 == 0 and w % 32 == 0:
+        padded_image = np.pad(sample['image'], ((32,32), (32, 32), (0,0)), mode="reflect")
+        padded_trimap = np.pad(sample['trimap'], ((32,32), (32, 32)), mode="reflect")
+    else:
+        target_h = 32 * ((h - 1) // 32 + 1)
+        target_w = 32 * ((w - 1) // 32 + 1)
+        pad_h = target_h - h
+        pad_w = target_w - w
+        padded_image = np.pad(sample['image'], ((32,pad_h+32), (32, pad_w+32), (0,0)), mode="reflect")
+        padded_trimap = np.pad(sample['trimap'], ((32,pad_h+32), (32, pad_w+32)), mode="reflect")
+
+    sample['image'] = padded_image
+    sample['trimap'] = padded_trimap
+
+    # ImageNet normalization
+    mean = torch.tensor([0.485, 0.456, 0.406]).view(3,1,1)
+    std = torch.tensor([0.229, 0.224, 0.225]).view(3,1,1)
+
+    # Convert RGB image (PIL loaded RGB) to standard float32
+
+    
+    image = sample['image'].transpose((2, 0, 1)).astype(np.float32)
+    trimap = sample['trimap']
+
+    # Trimap configuration
+    trimap[trimap < 85] = 0
+    trimap[trimap >= 170] = 2
+    trimap[trimap >= 85] = 1
+
+    image /= 255.
+
+    # To tensor
+    img_t = torch.from_numpy(image)
+    tri_t = torch.from_numpy(trimap).to(torch.long)
+    
+    img_t = img_t.sub_(mean).div_(std)
+    
+    # Trimap to one-hot 3 channel
+    tri_t = F.one_hot(tri_t, num_classes=3).permute(2, 0, 1).float()
+
+    # Add Batch Dimension
+    sample['image'] = img_t.unsqueeze(0)
+    sample['trimap'] = tri_t.unsqueeze(0)
+
+    return sample
+
+def matteformer_inference(model, image_dict):
+    with torch.no_grad(): 
+        image, trimap = image_dict['image'], image_dict['trimap']
+        image = image.cuda()
+        trimap = trimap.cuda()
+
+        pred = model(image, trimap)
+        alpha_pred_os1 = pred['alpha_os1']
+        alpha_pred_os4 = pred['alpha_os4']
+        alpha_pred_os8 = pred['alpha_os8']
+
+        # Refinement
+        alpha_pred = alpha_pred_os8.clone().detach()
+        weight_os4 = get_unknown_tensor_from_pred(alpha_pred, rand_width=CONFIG.model.self_refine_width1, train_mode=False)
+        alpha_pred[weight_os4>0] = alpha_pred_os4[weight_os4>0]
+        
+        weight_os1 = get_unknown_tensor_from_pred(alpha_pred, rand_width=CONFIG.model.self_refine_width2, train_mode=False)
+        alpha_pred[weight_os1>0] = alpha_pred_os1[weight_os1>0]
+
+        h, w = image_dict['alpha_shape']
+        alpha_pred = alpha_pred[0, 0, ...].data.cpu().numpy() * 255
+        alpha_pred = alpha_pred.astype(np.uint8)
+
+        # Enforce trimap constraints
+        # 0: bg, 2: fg
+        alpha_pred[np.argmax(trimap.cpu().numpy()[0], axis=0) == 0] = 0.0
+        alpha_pred[np.argmax(trimap.cpu().numpy()[0], axis=0) == 2] = 255.
+
+        # Crop padding
+        alpha_pred = alpha_pred[32:h+32, 32:w+32]
+
+        return alpha_pred
+

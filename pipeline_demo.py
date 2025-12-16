@@ -14,140 +14,17 @@ from utils.depthpro_runner import DepthProRunner
 from utils.harmonizer_runner import HarmonizeRunner
 import networks
 import utils as utils 
-from utils import CONFIG
-
-
-#MATTEFORMER helpers
-def gen_trimap(alpha, max_kernel_size=30):
-    """
-    Generate a trimap using MatteFormer's erosion method.
-    alpha: uint8 grayscale alpha matte (0–255)
-    """
-    alpha = alpha.astype(np.float32) / 255.0
-
-    # Foreground mask = alpha = 1
-    fg_mask = (alpha + 1e-5).astype(int).astype(np.uint8)
-    # Background mask = alpha = 0
-    bg_mask = (1 - alpha + 1e-5).astype(int).astype(np.uint8)
-
-    # Prebuild kernels like MatteFormer
-    kernels = [
-        cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (ks, ks))
-        for ks in range(1, max_kernel_size + 1)
-    ]
-
-    # Randomly choose kernel sizes (or fix them if deterministic behavior is preferred)
-    # Using random here as per your original script
-    fg_erode_kernel = kernels[np.random.randint(1, max_kernel_size)]
-    bg_erode_kernel = kernels[np.random.randint(1, max_kernel_size)]
-
-    fg_mask_eroded = cv2.erode(fg_mask, fg_erode_kernel)
-    bg_mask_eroded = cv2.erode(bg_mask, bg_erode_kernel)
-
-    # Create the trimap: 128 = unknown
-    trimap = np.ones_like(alpha, dtype=np.uint8) * 128
-    trimap[fg_mask_eroded == 1] = 255
-    trimap[bg_mask_eroded == 1] = 0
-
-    return trimap
-
-def matteformer_generator_tensor_dict(image, trimap):
-    """
-    Prepare dictionary for MatteFormer using in-memory Numpy arrays.
-    """
-    sample = {'image': image, 'trimap': trimap, 'alpha_shape': (image.shape[0], image.shape[1])}
-    h, w = sample["alpha_shape"]
-    
-    # Calculate Padding to multiple of 32
-    if h % 32 == 0 and w % 32 == 0:
-        padded_image = np.pad(sample['image'], ((32,32), (32, 32), (0,0)), mode="reflect")
-        padded_trimap = np.pad(sample['trimap'], ((32,32), (32, 32)), mode="reflect")
-    else:
-        target_h = 32 * ((h - 1) // 32 + 1)
-        target_w = 32 * ((w - 1) // 32 + 1)
-        pad_h = target_h - h
-        pad_w = target_w - w
-        padded_image = np.pad(sample['image'], ((32,pad_h+32), (32, pad_w+32), (0,0)), mode="reflect")
-        padded_trimap = np.pad(sample['trimap'], ((32,pad_h+32), (32, pad_w+32)), mode="reflect")
-
-    sample['image'] = padded_image
-    sample['trimap'] = padded_trimap
-
-    # ImageNet normalization
-    mean = torch.tensor([0.485, 0.456, 0.406]).view(3,1,1)
-    std = torch.tensor([0.229, 0.224, 0.225]).view(3,1,1)
-
-    # Convert RGB image (PIL loaded RGB) to standard float32
-
-    
-    image = sample['image'].transpose((2, 0, 1)).astype(np.float32)
-    trimap = sample['trimap']
-
-    # Trimap configuration
-    trimap[trimap < 85] = 0
-    trimap[trimap >= 170] = 2
-    trimap[trimap >= 85] = 1
-
-    image /= 255.
-
-    # To tensor
-    img_t = torch.from_numpy(image)
-    tri_t = torch.from_numpy(trimap).to(torch.long)
-    
-    img_t = img_t.sub_(mean).div_(std)
-    
-    # Trimap to one-hot 3 channel
-    tri_t = F.one_hot(tri_t, num_classes=3).permute(2, 0, 1).float()
-
-    # Add Batch Dimension
-    sample['image'] = img_t.unsqueeze(0)
-    sample['trimap'] = tri_t.unsqueeze(0)
-
-    return sample
-
-def matteformer_inference(model, image_dict):
-    with torch.no_grad(): 
-        image, trimap = image_dict['image'], image_dict['trimap']
-        image = image.cuda()
-        trimap = trimap.cuda()
-
-        pred = model(image, trimap)
-        alpha_pred_os1 = pred['alpha_os1']
-        alpha_pred_os4 = pred['alpha_os4']
-        alpha_pred_os8 = pred['alpha_os8']
-
-        # Refinement
-        alpha_pred = alpha_pred_os8.clone().detach()
-        weight_os4 = utils.get_unknown_tensor_from_pred(alpha_pred, rand_width=CONFIG.model.self_refine_width1, train_mode=False)
-        alpha_pred[weight_os4>0] = alpha_pred_os4[weight_os4>0]
-        
-        weight_os1 = utils.get_unknown_tensor_from_pred(alpha_pred, rand_width=CONFIG.model.self_refine_width2, train_mode=False)
-        alpha_pred[weight_os1>0] = alpha_pred_os1[weight_os1>0]
-
-        h, w = image_dict['alpha_shape']
-        alpha_pred = alpha_pred[0, 0, ...].data.cpu().numpy() * 255
-        alpha_pred = alpha_pred.astype(np.uint8)
-
-        # Enforce trimap constraints
-        # 0: bg, 2: fg
-        alpha_pred[np.argmax(trimap.cpu().numpy()[0], axis=0) == 0] = 0.0
-        alpha_pred[np.argmax(trimap.cpu().numpy()[0], axis=0) == 2] = 255.
-
-        # Crop padding
-        alpha_pred = alpha_pred[32:h+32, 32:w+32]
-
-        return alpha_pred
 
 # MATTE INFERENCE
 @torch.no_grad()
-def _aim_infer_alpha(aim: MatteNet, fg_img: Image.Image, device: str, size: int) -> torch.Tensor:
+def infer_alpha(aim: MatteNet, fg_img: Image.Image, device: str, size: int) -> torch.Tensor:
     fg = utils.pil_to_tensor(fg_img, size=size).to(device)   # (1,3,H,W) in [0,1]
     fg_n = utils.normalize_imagenet(fg, device=device)
 
-    pred_global, pred_local, pred_fusion = aim(fg_n)
+    _, _, pred_fusion = aim(fg_n)
 
     alpha = pred_fusion
-    # If output isn't already [0,1], sigmoid it.
+    # If output isn't already [0,1] sigmoid it
     if float(alpha.min().item()) < 0.0 or float(alpha.max().item()) > 1.0:
         alpha = torch.sigmoid(alpha)
     return alpha.clamp(0.0, 1.0)
@@ -199,20 +76,13 @@ def run_pipeline(
     fg = utils.pil_to_tensor(fg_img, size=out_size).to(device) # tensor versions
     bg = utils.pil_to_tensor(bg_img, size=out_size).to(device)
 
-    # if debug:
-        # better to output the round-tripped version rather than the original fg_img and bg_img
-        # because this also lets us spot issues with our tensor conversion code 
-        # _tensor_rgb_to_pil(fg).save(debug_dir/f"{prefix}_fg_resized.png")
-        # _tensor_rgb_to_pil(bg).save(debug_dir/f"{prefix}_bg_resized.png")
-
-
     # GENERATE ALPHA MATTE FOR FOREGROUND
     matte_net = MatteNet()
     ckpt = torch.load(matte_ckpt, map_location="cpu")
     matte_net.load_state_dict(ckpt["state_dict"], strict=True)
     matte_net.to(device).eval()
 
-    alpha_pred = _aim_infer_alpha(matte_net, fg_img, device=device, size=out_size)  # (1,1,H,W)
+    alpha_pred = infer_alpha(matte_net, fg_img, device=device, size=out_size)  # (1,1,H,W)
 
     if debug:
         utils.tensor_gray_to_pil(alpha_pred).save(debug_dir/f"{prefix}_alpha_base.png")
@@ -241,7 +111,7 @@ def run_pipeline(
         alpha_np = (alpha_pred * 255).byte().cpu().numpy()[0, 0] # (H,W)
         
         # 2. Generate Trimap
-        trimap_np = gen_trimap(alpha_np)
+        trimap_np = utils.gen_trimap(alpha_np)
         if debug:
             cv2.imwrite(str(debug_dir/f"{prefix}_trimap_generated.png"), trimap_np)
 
@@ -251,10 +121,10 @@ def run_pipeline(
         fg_np = np.array(fg_np_pil) # (H,W,3) RGB
 
         # 4. Prepare Dict
-        mf_dict = matteformer_generator_tensor_dict(fg_np, trimap_np)
+        mf_dict = utils.matteformer_generator_tensor_dict(fg_np, trimap_np)
         
         # 5. Run Inference
-        refined_alpha_uint8 = matteformer_inference(mf_model, mf_dict)
+        refined_alpha_uint8 = utils.matteformer_inference(mf_model, mf_dict)
         
         if debug:
             cv2.imwrite(str(debug_dir/f"{prefix}_alpha_refined_matteformer.png"), refined_alpha_uint8)
