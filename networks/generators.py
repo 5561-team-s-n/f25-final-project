@@ -36,7 +36,7 @@ class Generator_MatteFormer(nn.Module):
         if is_train and CONFIG.model.imagenet_pretrain_path is not None and os.path.isfile(CONFIG.model.imagenet_pretrain_path):
             self.init_pretrained_weight(pretrained_path=CONFIG.model.imagenet_pretrain_path)
         else:
-            print("Training WITHOUT pretrained weights.")
+            # print("Training WITHOUT pretrained weights.")
 
     def init_pretrained_weight(self, pretrained_path=None):
         if not os.path.isfile(pretrained_path):
