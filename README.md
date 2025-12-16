@@ -1,4 +1,7 @@
 # Setup Environment
+First, download the code zip or `git clone` the repository. 
+NOTE that no extra downloads are necessary since the checkpoints we trained from scratch are present in the pretrained/ folder as Git LFS objects. 
+## Downloading Dependencies
 ### Option A (Slower)
 You can download packages to a local venv with:
 ```bash
@@ -17,16 +20,25 @@ Install it and download packages with the following command:
 curl -LsSf https://astral.sh/uv/install.sh | sh # you could also do `brew install uv` on MacOS, or download through your OS's package manager 
 ## if on Windows, run the following instead of the above:
 # powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | iex"
-## At this point, you'll probably have to close and reopen your terminal for the command to take effect. Then:
+## At this point, you'll probably have to close and reopen your terminal for the `uv` command to work in your shell. Then:
 uv venv
 source .venv/bin/activate
-uv pip install -r requirements.txt --index-strategy unsafe-best-match # flag is required since 
+uv pip install -r requirements.txt --index-strategy unsafe-best-match # extra index-strategy flag is required since we use a custom cuda torch index url 
 ```
-But if this doesn't work, you can use Option A (which is tried and true). 
+But if this doesn't seem to work on your machine, you can use Option A (which is tried and true). 
+
 # Running the Code
 
-Use like `python pipeline_demo.py --debug --fg <./samples/image> --bg <./samples/image>`
-See bottom of pipeline_demo.py for all command line arguments
+You can reproduce our results by simply running `python pipeline_demo.py`.  
+Notes: 
+- By default, we have picked a sample foreground and background from the samples/ folder to showcase the functionality, but you can specify other images with the command line arguments `--fg <path/to/image> --bg <path/to/image>`. 
+- Results will end up in /samples/output, which may be changed with `--out-dir <path>`.  
+- Pass --debug to get intermediate results (such as depthmaps and mattes) in /samples/output/debug. 
+- By default, a modified trimap-free Matteformer trained from scratch is used for higher quality mattes. Pass --disable_matteformer skip the Matteformer refinement step and only use our previous, lower quality AIM-based model. (Note that the Matteformer code requires CUDA, so if this is not available, the disable flag will fix the issue).
+- Depthmaps can take ~1-2 minutes to generate, so there is code to cache them by default (into /samples/output/cache). This speeds up inference on successive runs. Pass --disable_cache to prevent this.  
+- See bottom of pipeline_demo.py for further command line arguments
+
+As mentioned above, if running the program on a new foreground and background, everything should take about 1-2 minutes to complete. But thereafter depthmaps will be cached and runs should only take about 10 seconds.    
 
 TODO:
 - [ ] Writing report -- datasets used were AIM500 for training mattenet, iHarmony for training image harmonizer. Both were used as foregrounds/backgrounds in samples

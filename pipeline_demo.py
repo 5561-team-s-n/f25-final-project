@@ -268,7 +268,7 @@ def run_pipeline(
     matte_ckpt="./pretrained/matte_net_pretrained.pth",
     iharm_ckpt="./pretrained/harmonizer_net_pretrained.pth",
     debug: bool = False,
-    matteformer_disable: bool = False,
+    disable_matteformer: bool = False,
     matteformer_ckpt="./pretrained/matteformer_pretrained_1k.pth",
     out_dir: str = "./samples/output",
     disable_cache: bool = False,
@@ -327,8 +327,9 @@ def run_pipeline(
     #add matteformer
     #--------------
 
-    if matteformer_ckpt and not matteformer_disable:
-        if debug: print("Running MatteFormer Refinement...")
+    if matteformer_ckpt and not disable_matteformer:
+        if debug: 
+            print("Running MatteFormer Refinement...")
         
         # Load Config
         with open("./config/MatteFormer_Composition1k.toml", encoding="utf-8") as f:
@@ -436,17 +437,17 @@ def run_pipeline(
 
 def _parse_args():
     p = argparse.ArgumentParser()
-    p.add_argument("--fg", type=str, default="./samples/foreground3.jpg", help="Foreground image path")
-    p.add_argument("--bg", type=str, default="./samples/background3.jpg", help="Background image path")
+    p.add_argument("--fg", type=str, default="./samples/fg3.jpg", help="Foreground image path")
+    p.add_argument("--bg", type=str, default="./samples/bg3.jpg", help="Background image path")
     p.add_argument("--device", type=str, default="cuda")
     p.add_argument("--out_size", type=int, default=512)
     p.add_argument("--debug", action="store_true", help="Output the intermediate .npy, depthmap, and alpha mattes for debugging")
-    p.add_argument("--matteformer_disable", action="store_true", help="With this option, the pipeline will skip the mattformer alphamat refinement step.")
+    p.add_argument("--disable_matteformer", action="store_true", help="With this option, the pipeline will skip the matteformer alpha matte refinement step.")
     p.add_argument("--disable_cache", action="store_true", help="With this option, the script will avoid reusing depthmaps that have been previously generated. This may considerably slow down things.")
     p.add_argument("--matte_ckpt", type=str, default="./pretrained/matte_net_pretrained.pth")
     p.add_argument("--iharm_ckpt", type=str, default="./pretrained/harmonizer_net_pretrained.pth")
     p.add_argument("--out_dir", type=str, default="./samples/output")
-    p.add_argument("--out_filename", type=str, help="Optional output filename (otherwise it'll be like <fg>__<bg>_result.png)")
+    p.add_argument("--out_filename", type=str, help="Optional output filename (otherwise it'll be like <fg>_<bg>.png)")
     
     return p.parse_args()
 
@@ -462,7 +463,7 @@ if __name__ == "__main__":
         matte_ckpt=args.matte_ckpt,
         iharm_ckpt=args.iharm_ckpt,
         debug=args.debug,
-        matteformer_disable=args.matteformer_disable,
+        disable_matteformer=args.disable_matteformer,
         out_dir=args.out_dir,
         disable_cache=args.disable_cache,
     )
@@ -473,10 +474,10 @@ if __name__ == "__main__":
     else:
         fg_stem = Path(args.fg).stem
         bg_stem = Path(args.bg).stem
-        if args.matteformer_disable:
-            out_path = out_dir / f"{fg_stem}__{bg_stem}_resultAIM.png"
+        if args.disable_matteformer:
+            out_path = out_dir / f"{fg_stem}_{bg_stem}_AIM.png"
         else:
-            out_path = out_dir / f"{fg_stem}__{bg_stem}_resultMATTF.png"
+            out_path = out_dir / f"{fg_stem}_{bg_stem}.png"
 
     out.save(out_path)
     print(f"Saved {out_path}")
