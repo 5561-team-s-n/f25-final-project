@@ -34,6 +34,7 @@ def infer_alpha(aim: MatteNet, fg_img: Image.Image, device: str, size: int) -> t
 def run_pipeline(
     fg_path,
     bg_path,
+    depth_shift: float = 0.0,
     device="cuda",
     out_size=512,
     matte_ckpt="./pretrained/matte_net_pretrained.pth",
@@ -183,13 +184,13 @@ def run_pipeline(
         utils.save_depth(depth_bg,      debug_dir/f"{prefix}_depth_bg_full", debug)
 
     # DEPTH-AWARE COMPOSITE OF FOREGROUND ONTO BACKGROUND
-    comp = depth_aware_composite(fg, alpha_pred, depth_fg, bg, depth_bg)
+    comp, new_fg_alpha = depth_aware_composite(fg, alpha_pred, depth_fg, bg, depth_bg, depth_shift)
     if debug:
         utils.tensor_rgb_to_pil(comp).save(debug_dir/f"{prefix}_comp.png")
 
 
     # HARMONIZATION
-    mask = alpha_pred.clamp(0.0, 1.0)
+    mask = new_fg_alpha.clamp(0.0, 1.0)
 
     harmonize_net = HarmonizeRunner(ckpt_path=iharm_ckpt, device=device)
     comp_h = harmonize_net.run(comp, mask)
@@ -201,8 +202,9 @@ def run_pipeline(
 
 def _parse_args():
     p = argparse.ArgumentParser()
-    p.add_argument("--fg", type=str, default="./samples/fg3.jpg", help="Foreground image path")
+    p.add_argument("--fg", type=str, default="./samples/fg3.png", help="Foreground image path")
     p.add_argument("--bg", type=str, default="./samples/bg3.jpg", help="Background image path")
+    p.add_argument("--depth_shift", type=float, default=0.0, help="Amount to shift the foreground relative to the background (positive values push foreground farther, negative pull foreground closer)")
     p.add_argument("--device", type=str, default="cuda")
     p.add_argument("--out_size", type=int, default=512)
     p.add_argument("--debug", action="store_true", help="Output the intermediate .npy, depthmap, and alpha mattes for debugging")
@@ -222,6 +224,7 @@ if __name__ == "__main__":
     out = run_pipeline(
         fg_path=args.fg,
         bg_path=args.bg,
+        depth_shift=args.depth_shift,
         device=args.device,
         out_size=args.out_size,
         matte_ckpt=args.matte_ckpt,

@@ -34,14 +34,15 @@ Notes:
 - By default, we have picked a sample foreground and background from the `samples/` folder to showcase the functionality, but you can specify other images with the command line arguments `--fg <path/to/image> --bg <path/to/image>`. 
 - Results will end up in `/samples/output`, which may be changed with `--out-dir <path>`.  
 - Pass `--debug` to get intermediate results (such as depthmaps and mattes) in `/samples/output/debug`. 
-- By default, a modified trimap-free Matteformer trained from scratch is used for higher quality mattes. Pass `--disable_matteformer` to skip the Matteformer refinement step and only use our previous, lower quality AIM-based model. (Note that the Matteformer code requires CUDA, so if this is not available, the disable flag will fix the issue).
+- By default, a modified trimap-free Matteformer trained from scratch is used for higher quality mattes. Pass `--disable_matteformer` to skip the Matteformer refinement step and only use our previous, lower quality model. (Note that the Matteformer code requires CUDA, so if this is not available, the disable flag will fix the issue).
 - Depthmaps can take ~1-2 minutes to generate, so there is code to cache them by default (into `/samples/output/cache`). This speeds up inference on successive runs. Pass `--disable_cache` to prevent this.  
 - See bottom of `pipeline_demo.py` for further command line arguments
 
 As mentioned above, if running the program on a new foreground and background, everything should take about 1-2 minutes to complete. But thereafter depthmaps will be cached and runs should only take about 10 seconds.    
 
 # Acknowledgments
-The image harmonization code is based on code for [DCCF from Xue et. al.](https://github.com/rockeyben/DCCF) which is present in the `iharm/` folder. 
+- Some utilities for training / losses of the image harmonization step use code from DCCF by [Xue et. al.](https://github.com/rockeyben/DCCF) which is present in the `iharm/` folder. 
+- Some Matteformer utilities present in `utils/` and `networks/` comes from [Park et. al.](https://github.com/webtoon/matteformer) 
 
 TODO:
 - [ ] Writing report -- datasets used were AIM500 for training mattenet, iHarmony for training image harmonizer. Both were used as foregrounds/backgrounds in samples
