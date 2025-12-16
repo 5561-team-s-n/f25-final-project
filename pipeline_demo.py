@@ -4,7 +4,7 @@ import torch
 from PIL import Image, ImageDraw, ImageFont
 import numpy as np
 
-from models.matte_net import AimNet
+from models.matte_net import MatteNet
 from utils.occlusion_composite import depth_aware_composite
 from utils.depthpro_runner import DepthProRunner
 from utils.harmonizer_runner import HarmonizeRunner
@@ -117,7 +117,7 @@ def _save_depth(depth: torch.Tensor, out_base: Path, debug: bool):
 
 # MATTE INFERENCE
 @torch.no_grad()
-def _aim_infer_alpha(aim: AimNet, fg_img: Image.Image, device: str, size: int) -> torch.Tensor:
+def _aim_infer_alpha(aim: MatteNet, fg_img: Image.Image, device: str, size: int) -> torch.Tensor:
     fg = pil_to_tensor(fg_img, size=size).to(device)   # (1,3,H,W) in [0,1]
     fg_n = _normalize_imagenet(fg, device=device)
 
@@ -182,12 +182,12 @@ def run_pipeline(
 
 
     # GENERATE ALPHA MATTE FOR FOREGROUND
-    aim = AimNet()
+    matte_net = MatteNet()
     ckpt = torch.load(matte_ckpt, map_location="cpu")
-    aim.load_state_dict(ckpt["state_dict"], strict=True)
-    aim.to(device).eval()
+    matte_net.load_state_dict(ckpt["state_dict"], strict=True)
+    matte_net.to(device).eval()
 
-    alpha_pred = _aim_infer_alpha(aim, fg_img, device=device, size=out_size)  # (1,1,H,W)
+    alpha_pred = _aim_infer_alpha(matte_net, fg_img, device=device, size=out_size)  # (1,1,H,W)
 
     if debug:
         _tensor_gray_to_pil(alpha_pred).save(debug_dir/f"{prefix}_alpha_aim.png")
@@ -247,7 +247,7 @@ def run_pipeline(
         _tensor_rgb_to_pil(comp).save(debug_dir/f"{prefix}_composite_depthaware.png")
 
 
-    # HARMONIZATION via AICT ViT
+    # HARMONIZATION
     mask = alpha_pred.clamp(0.0, 1.0)
 
     aict = HarmonizeRunner(ckpt_path=iharm_ckpt, device=device)

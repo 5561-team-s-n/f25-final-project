@@ -210,7 +210,7 @@ class ResNet(nn.Module):
 
 def resnet34_mp(**kwargs):
     model = ResNet(BasicBlock, [3, 4, 6, 3], **kwargs)
-    checkpoint = torch.load("./pretrained/resnet_pretrained.pth.tar")
+    checkpoint = torch.load("./pretrained/resnet_pretrained.pth.tar", map_location="cpu")
     model.load_state_dict(checkpoint)
     return model
 
