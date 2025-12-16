@@ -1,2 +1,2 @@
 from .ssam_model import SSAMImageHarmonization
-from .aict_net import Harmonize
+from .harmonizer_net import Harmonize
