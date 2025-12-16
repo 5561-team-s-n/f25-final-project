@@ -5,7 +5,7 @@ import torch
 import torch.nn.functional as F
 
 from kornia.color import RgbToHsv, HsvToRgb
-from iharm.model.base.aict_net import Harmonize
+from iharm.model.base.harmonizer_net import Harmonize
 from iharm.mconfigs import BMCONFIGS
 
 
