@@ -204,7 +204,7 @@ def _parse_args():
     p = argparse.ArgumentParser()
     p.add_argument("--fg", type=str, default="./samples/fg3.png", help="Foreground image path")
     p.add_argument("--bg", type=str, default="./samples/bg3.jpg", help="Background image path")
-    p.add_argument("--depth_shift", type=float, default=0.0, help="Amount to shift the foreground relative to the background (positive values push foreground farther, negative pull foreground closer)")
+    p.add_argument("--depth_shift", type=float, default=1.8, help="Amount to shift the foreground relative to the background (positive values push foreground farther, negative pull foreground closer)")
     p.add_argument("--device", type=str, default="cuda")
     p.add_argument("--out_size", type=int, default=512)
     p.add_argument("--debug", action="store_true", help="Output the intermediate .npy, depthmap, and alpha mattes for debugging")
