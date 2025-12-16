@@ -214,3 +214,19 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+
+#excess
+.old/
+.sampleimages/
+.samples/
+dis646on1ktestset.zip
+dis646onAIMtest.zip
+pretrained1k.zip
+pretrainedonAIM.zip
+transformerOutputs.zip
+matteformer-master/
+experiments/
+checkpoints/
+Composition-1k-testset/
+AIM-MASTER/

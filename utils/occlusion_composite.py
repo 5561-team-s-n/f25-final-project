@@ -81,7 +81,7 @@ def depth_aware_composite(
     bg_rgb: torch.Tensor, # (B,3,H,W) in [0,1]
     depth_bg: torch.Tensor, # (B,1,H,W) (DepthPro depth for background)
     *,
-    depth_shift: float = 1.3, # positive pushes fg farther, negative pulls fg closer
+    depth_shift: float = -3.0, # positive pushes fg farther, negative pulls fg closer
     sharpness: float = 10.0, # higher => harder occlusion boundary
     use_soft_gate: bool = True, # if False uses hard compare (bg closer => occlude)
     clamp: bool = True,
