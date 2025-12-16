@@ -16,7 +16,7 @@ from iharm.data.transforms import HCompose, RandomCropNoResize
 from iharm.model.base.aict_net import Harmonize
 from iharm.model.losses import MaskWeightedMSE, SCS_CR_loss, ColorDistance, CoordDistance
 from iharm.model.metrics import DenormalizedPSNRMetric_FR, DenormalizedMSEMetric_FR
-from iharm.engine.AICT_trainer import Trainer
+from iharm.engine.harmonizer_trainer import Trainer
 from iharm.mconfigs import BMCONFIGS
 from iharm.utils.log import logger
 

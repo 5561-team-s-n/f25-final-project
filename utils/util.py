@@ -3,10 +3,11 @@ import cv2
 import torch
 import logging
 import numpy as np
-from utils.config import CONFIG
+from utils.matteformer_config import CONFIG
 import torch.distributed as dist
+from PIL import Image, ImageDraw, ImageFont
+from pathlib import Path
 import torch.nn.functional as F
-
 
 def make_dir(target_dir):
     """
@@ -126,3 +127,117 @@ def get_unknown_tensor_from_pred(pred, rand_width=30, train_mode=True):
     weight = F.interpolate(weight, size=(H,W), mode='nearest')
 
     return weight
+
+def pil_to_tensor(img: Image.Image, size: int) -> torch.Tensor:
+    img = img.resize((size, size), Image.BILINEAR)
+    arr = np.array(img).astype("float32") / 255.0
+    return torch.from_numpy(arr).permute(2, 0, 1).unsqueeze(0)
+
+
+def normalize_imagenet(x01: torch.Tensor, device: str) -> torch.Tensor:
+    mean = torch.tensor([0.485, 0.456, 0.406], device=device, dtype=x01.dtype).view(1, 3, 1, 1)
+    std = torch.tensor([0.229, 0.224, 0.225], device=device, dtype=x01.dtype).view(1, 3, 1, 1)
+    return (x01 - mean) / std
+
+
+def tensor_rgb_to_pil(x01: torch.Tensor) -> Image.Image:
+    x = x01.detach().clamp(0.0, 1.0).squeeze(0).permute(1, 2, 0).cpu().numpy()
+    x = (x * 255.0).round().clip(0, 255).astype(np.uint8)
+    return Image.fromarray(x)
+
+
+def tensor_gray_to_pil(x01: torch.Tensor) -> Image.Image:
+    x = x01.detach().clamp(0.0, 1.0).squeeze(0).squeeze(0).cpu().numpy()
+    x = (x * 255.0).round().clip(0, 255).astype(np.uint8)
+    return Image.fromarray(x)
+
+
+def _depth_to_uint8(depth: torch.Tensor, eps: float = 1e-6) -> np.ndarray:
+    d = depth.detach().squeeze(0).squeeze(0).float().cpu().numpy()
+    finite = np.isfinite(d)
+    if not np.any(finite):
+        return np.zeros_like(d, dtype=np.uint8)
+    d_min = float(np.min(d[finite]))
+    d_max = float(np.max(d[finite]))
+    if d_max <= d_min + eps:
+        return np.zeros_like(d, dtype=np.uint8)
+    u8 = (255.0 * (d - d_min) / (d_max - d_min + eps)).clip(0, 255).astype(np.uint8)
+    return u8
+
+def _annotate_depth_u8_with_legend(u8: np.ndarray, d_min: float, d_max: float, unit: str = "m") -> Image.Image:
+    base = Image.fromarray(u8).convert("RGB")
+    W, H = base.size
+    draw = ImageDraw.Draw(base)
+    try:
+        font = ImageFont.load_default()
+    except Exception:
+        font = None
+
+    box_w = int(max(140, min(220, 0.22 * W)))
+    box_h = int(max(120, min(260, 0.32 * H)))
+    x0, y0 = 10, 10
+    x1, y1 = x0 + box_w, y0 + box_h
+    draw.rectangle([x0, y0, x1, y1], fill=(255, 255, 255), outline=(0, 0, 0), width=1)
+
+    title = f"Depth ({unit})" if unit else "Depth"
+    draw.text((x0 + 10, y0 + 6), title, fill=(0, 0, 0), font=font)
+
+    bar_x0 = x0 + 10
+    bar_y0 = y0 + 24
+    bar_w = 16
+    bar_y1 = y1 - 10
+    bar_h = max(1, bar_y1 - bar_y0)
+
+    for j in range(bar_h):
+        t = j / (bar_h - 1) if bar_h > 1 else 0.0
+        shade = int(round(255.0 * (1.0 - t)))
+        draw.line([(bar_x0, bar_y0 + j), (bar_x0 + bar_w, bar_y0 + j)], fill=(shade, shade, shade))
+    draw.rectangle([bar_x0, bar_y0, bar_x0 + bar_w, bar_y0 + bar_h], outline=(0, 0, 0), width=1)
+
+    ticks = [1.0, 0.75, 0.5, 0.25, 0.0]
+    for p in ticks:
+        y = int(round(bar_y0 + (1.0 - p) * (bar_h - 1)))
+        draw.line([(bar_x0 + bar_w + 2, y), (bar_x0 + bar_w + 8, y)], fill=(0, 0, 0))
+        val = d_min + p * (d_max - d_min)
+        label = f"{val:.3g}" + (f" {unit}" if unit else "")
+        draw.text((bar_x0 + bar_w + 12, y - 6), label, fill=(0, 0, 0), font=font)
+
+    return base
+
+
+def save_depth(depth: torch.Tensor, out_base: Path, debug: bool):
+    out_base.parent.mkdir(parents=True, exist_ok=True)
+
+    d = depth.detach().squeeze(0).squeeze(0).float().cpu().numpy().astype(np.float32)
+    # np.save(out_base.with_suffix(".npy"), d)
+
+    finite = np.isfinite(d)
+    if np.any(finite):
+        d_min = float(np.min(d[finite]))
+        d_max = float(np.max(d[finite]))
+    else:
+        d_min, d_max = 0.0, 0.0
+    
+    if debug:
+        print(f"Min/max depth for {out_base}: {d_min}, {d_max}")
+
+    u8 = _depth_to_uint8(depth)
+    _annotate_depth_u8_with_legend(u8, d_min=d_min, d_max=d_max, unit="m").save(out_base.with_suffix(".png"))
+
+def get_masked_local_from_global(global_sigmoid, local_sigmoid):
+	values, index = torch.max(global_sigmoid,1)
+	index = index[:,None,:,:].float()
+	### index <===> [0, 1, 2]
+	### bg_mask <===> [1, 0, 0]
+	bg_mask = index.clone()
+	bg_mask[bg_mask==2]=1
+	bg_mask = 1- bg_mask
+	### trimap_mask <===> [0, 1, 0]
+	trimap_mask = index.clone()
+	trimap_mask[trimap_mask==2]=0
+	### fg_mask <===> [0, 0, 1]
+	fg_mask = index.clone()
+	fg_mask[fg_mask==1]=0
+	fg_mask[fg_mask==2]=1
+	fusion_sigmoid = local_sigmoid*trimap_mask+fg_mask
+	return fusion_sigmoid

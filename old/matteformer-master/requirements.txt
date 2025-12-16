@@ -1,8 +1,0 @@
-torch
-torchvision
-timm
-numpy
-opencv-python
-toml
-easydict
-pprint

@@ -1,7 +1,7 @@
 import argparse
 from pathlib import Path
 import torch
-from PIL import Image, ImageDraw, ImageFont
+from PIL import Image
 import numpy as np
 import cv2
 import toml
@@ -12,118 +12,12 @@ from models.matte_net import MatteNet
 from utils.occlusion_composite import depth_aware_composite
 from utils.depthpro_runner import DepthProRunner
 from utils.harmonizer_runner import HarmonizeRunner
-
-
 import networks
 import utils as utils 
 from utils import CONFIG
 
-def pil_to_tensor(img: Image.Image, size: int) -> torch.Tensor:
-    img = img.resize((size, size), Image.BILINEAR)
-    arr = np.array(img).astype("float32") / 255.0
-    return torch.from_numpy(arr).permute(2, 0, 1).unsqueeze(0)  # (1,3,H,W)
-
-
-def _normalize_imagenet(x01: torch.Tensor, device: str) -> torch.Tensor:
-    mean = torch.tensor([0.485, 0.456, 0.406], device=device, dtype=x01.dtype).view(1, 3, 1, 1)
-    std = torch.tensor([0.229, 0.224, 0.225], device=device, dtype=x01.dtype).view(1, 3, 1, 1)
-    return (x01 - mean) / std
-
-
-def _tensor_rgb_to_pil(x01: torch.Tensor) -> Image.Image:
-    # x01: (1,3,H,W) in [0,1]
-    x = x01.detach().clamp(0.0, 1.0).squeeze(0).permute(1, 2, 0).cpu().numpy()
-    x = (x * 255.0).round().clip(0, 255).astype(np.uint8)
-    return Image.fromarray(x)
-
-
-def _tensor_gray_to_pil(x01: torch.Tensor) -> Image.Image:
-    # x01: (1,1,H,W) in [0,1]
-    x = x01.detach().clamp(0.0, 1.0).squeeze(0).squeeze(0).cpu().numpy()
-    x = (x * 255.0).round().clip(0, 255).astype(np.uint8)
-    return Image.fromarray(x)
-
-
-def _depth_to_uint8(depth: torch.Tensor, eps: float = 1e-6) -> np.ndarray:
-    # depth: (1,1,H,W) float
-    d = depth.detach().squeeze(0).squeeze(0).float().cpu().numpy()
-    finite = np.isfinite(d)
-    if not np.any(finite):
-        return np.zeros_like(d, dtype=np.uint8)
-    d_min = float(np.min(d[finite]))
-    d_max = float(np.max(d[finite]))
-    if d_max <= d_min + eps:
-        return np.zeros_like(d, dtype=np.uint8)
-    u8 = (255.0 * (d - d_min) / (d_max - d_min + eps)).clip(0, 255).astype(np.uint8)
-    return u8
-
-def _annotate_depth_u8_with_legend(u8: np.ndarray, d_min: float, d_max: float, unit: str = "m") -> Image.Image:
-    base = Image.fromarray(u8).convert("RGB")
-    W, H = base.size
-    draw = ImageDraw.Draw(base)
-    try:
-        font = ImageFont.load_default()
-    except Exception:
-        font = None
-
-    box_w = int(max(140, min(220, 0.22 * W)))
-    box_h = int(max(120, min(260, 0.32 * H)))
-    x0, y0 = 10, 10
-    x1, y1 = x0 + box_w, y0 + box_h
-    draw.rectangle([x0, y0, x1, y1], fill=(255, 255, 255), outline=(0, 0, 0), width=1)
-
-    title = f"Depth ({unit})" if unit else "Depth"
-    draw.text((x0 + 10, y0 + 6), title, fill=(0, 0, 0), font=font)
-
-    bar_x0 = x0 + 10
-    bar_y0 = y0 + 24
-    bar_w = 16
-    bar_y1 = y1 - 10
-    bar_h = max(1, bar_y1 - bar_y0)
-
-    for j in range(bar_h):
-        t = j / (bar_h - 1) if bar_h > 1 else 0.0
-        shade = int(round(255.0 * (1.0 - t)))
-        draw.line([(bar_x0, bar_y0 + j), (bar_x0 + bar_w, bar_y0 + j)], fill=(shade, shade, shade))
-    draw.rectangle([bar_x0, bar_y0, bar_x0 + bar_w, bar_y0 + bar_h], outline=(0, 0, 0), width=1)
-
-    ticks = [1.0, 0.75, 0.5, 0.25, 0.0]  # 1=max at top, 0=min at bottom
-    for p in ticks:
-        y = int(round(bar_y0 + (1.0 - p) * (bar_h - 1)))
-        draw.line([(bar_x0 + bar_w + 2, y), (bar_x0 + bar_w + 8, y)], fill=(0, 0, 0))
-        val = d_min + p * (d_max - d_min)
-        label = f"{val:.3g}" + (f" {unit}" if unit else "")
-        draw.text((bar_x0 + bar_w + 12, y - 6), label, fill=(0, 0, 0), font=font)
-
-    return base
-
-
-def _save_depth(depth: torch.Tensor, out_base: Path, debug: bool):
-    """
-    Writes:
-      out_base.with_suffix(".npy")  (float32 HxW)
-      out_base.with_suffix(".png")  (min-max normalized grayscale)
-    """
-    out_base.parent.mkdir(parents=True, exist_ok=True)
-
-    d = depth.detach().squeeze(0).squeeze(0).float().cpu().numpy().astype(np.float32)
-    np.save(out_base.with_suffix(".npy"), d)
-
-    finite = np.isfinite(d)
-    if np.any(finite):
-        d_min = float(np.min(d[finite]))
-        d_max = float(np.max(d[finite]))
-    else:
-        d_min, d_max = 0.0, 0.0
-    
-    if debug:
-        print(f"Min/max depth for {out_base}: {d_min}, {d_max}")
-
-    u8 = _depth_to_uint8(depth)
-    _annotate_depth_u8_with_legend(u8, d_min=d_min, d_max=d_max, unit="m").save(out_base.with_suffix(".png"))
 
 #MATTEFORMER helpers
-
 def gen_trimap(alpha, max_kernel_size=30):
     """
     Generate a trimap using MatteFormer's erosion method.
@@ -247,8 +141,8 @@ def matteformer_inference(model, image_dict):
 # MATTE INFERENCE
 @torch.no_grad()
 def _aim_infer_alpha(aim: MatteNet, fg_img: Image.Image, device: str, size: int) -> torch.Tensor:
-    fg = pil_to_tensor(fg_img, size=size).to(device)   # (1,3,H,W) in [0,1]
-    fg_n = _normalize_imagenet(fg, device=device)
+    fg = utils.pil_to_tensor(fg_img, size=size).to(device)   # (1,3,H,W) in [0,1]
+    fg_n = utils.normalize_imagenet(fg, device=device)
 
     pred_global, pred_local, pred_fusion = aim(fg_n)
 
@@ -302,14 +196,14 @@ def run_pipeline(
     # LOAD IMAGES
     fg_img = Image.open(fg_path).convert("RGB")
     bg_img = Image.open(bg_path).convert("RGB")
-    fg = pil_to_tensor(fg_img, size=out_size).to(device) # tensor versions
-    bg = pil_to_tensor(bg_img, size=out_size).to(device)
+    fg = utils.pil_to_tensor(fg_img, size=out_size).to(device) # tensor versions
+    bg = utils.pil_to_tensor(bg_img, size=out_size).to(device)
 
-    if debug:
+    # if debug:
         # better to output the round-tripped version rather than the original fg_img and bg_img
         # because this also lets us spot issues with our tensor conversion code 
-        _tensor_rgb_to_pil(fg).save(debug_dir/f"{prefix}_fg_resized.png")
-        _tensor_rgb_to_pil(bg).save(debug_dir/f"{prefix}_bg_resized.png")
+        # _tensor_rgb_to_pil(fg).save(debug_dir/f"{prefix}_fg_resized.png")
+        # _tensor_rgb_to_pil(bg).save(debug_dir/f"{prefix}_bg_resized.png")
 
 
     # GENERATE ALPHA MATTE FOR FOREGROUND
@@ -321,8 +215,8 @@ def run_pipeline(
     alpha_pred = _aim_infer_alpha(matte_net, fg_img, device=device, size=out_size)  # (1,1,H,W)
 
     if debug:
-        _tensor_gray_to_pil(alpha_pred).save(debug_dir/f"{prefix}_alpha_aim.png")
-        np.save(debug_dir/f"{prefix}_alpha_aim.npy", alpha_pred.squeeze(0).squeeze(0).detach().cpu().numpy().astype(np.float32))
+        utils.tensor_gray_to_pil(alpha_pred).save(debug_dir/f"{prefix}_alpha_base.png")
+        # np.save(debug_dir/f"{prefix}_alpha_base.npy", alpha_pred.squeeze(0).squeeze(0).detach().cpu().numpy().astype(np.float32))
 
     #add matteformer
     #--------------
@@ -363,7 +257,7 @@ def run_pipeline(
         refined_alpha_uint8 = matteformer_inference(mf_model, mf_dict)
         
         if debug:
-            cv2.imwrite(str(debug_dir/f"{prefix}_alpha_02_matteformer_refined.png"), refined_alpha_uint8)
+            cv2.imwrite(str(debug_dir/f"{prefix}_alpha_refined_matteformer.png"), refined_alpha_uint8)
 
         # 6. Convert back to Tensor (1,1,H,W) [0-1] for pipeline
         alpha_pred = torch.from_numpy(refined_alpha_uint8).float().to(device) / 255.0
@@ -414,26 +308,26 @@ def run_pipeline(
                 print(f"Saved BG depth cache: {bg_cache}")
 
     if debug:
-        _save_depth(depth_fg_full, debug_dir/f"{prefix}_depth_fg_full", debug)
-        _save_depth(depth_fg,      debug_dir/f"{prefix}_depth_fg_masked", debug)
-        _save_depth(depth_bg,      debug_dir/f"{prefix}_depth_bg_full", debug)
+        utils.save_depth(depth_fg_full, debug_dir/f"{prefix}_depth_fg_full", debug)
+        utils.save_depth(depth_fg,      debug_dir/f"{prefix}_depth_fg_masked", debug)
+        utils.save_depth(depth_bg,      debug_dir/f"{prefix}_depth_bg_full", debug)
 
     # DEPTH-AWARE COMPOSITE OF FOREGROUND ONTO BACKGROUND
     comp = depth_aware_composite(fg, alpha_pred, depth_fg, bg, depth_bg)
     if debug:
-        _tensor_rgb_to_pil(comp).save(debug_dir/f"{prefix}_composite_depthaware.png")
+        utils.tensor_rgb_to_pil(comp).save(debug_dir/f"{prefix}_comp.png")
 
 
     # HARMONIZATION
     mask = alpha_pred.clamp(0.0, 1.0)
 
-    aict = HarmonizeRunner(ckpt_path=iharm_ckpt, device=device)
-    comp_h = aict.run(comp, mask)
+    harmonize_net = HarmonizeRunner(ckpt_path=iharm_ckpt, device=device)
+    comp_h = harmonize_net.run(comp, mask)
 
     if debug:
-        _tensor_rgb_to_pil(comp_h).save(debug_dir / f"{prefix}_harmonized_aict.png")
+        utils.tensor_rgb_to_pil(comp_h).save(debug_dir / f"{prefix}_iharm.png")
 
-    return _tensor_rgb_to_pil(comp_h)
+    return utils.tensor_rgb_to_pil(comp_h)
 
 def _parse_args():
     p = argparse.ArgumentParser()

@@ -5,7 +5,7 @@ import logging
 import datetime
 import numpy as np
 from   pprint import pprint
-from   utils.config import CONFIG
+from   utils.matteformer_config import CONFIG
 
 LEVELS = {
     "DEBUG": logging.DEBUG,

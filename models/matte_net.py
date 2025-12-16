@@ -1,7 +1,7 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from utils.matte_util import *
+from utils.util import get_masked_local_from_global
 from models.resnet import *
 
 def conv_up_psp(in_channels, out_channels, up_sample):
