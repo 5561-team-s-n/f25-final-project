@@ -33,7 +33,7 @@ def _tensor_gray_to_pil(x01: torch.Tensor) -> Image.Image:
     # x01: (1,1,H,W) in [0,1]
     x = x01.detach().clamp(0.0, 1.0).squeeze(0).squeeze(0).cpu().numpy()
     x = (x * 255.0).round().clip(0, 255).astype(np.uint8)
-    return Image.fromarray(x, mode="L")
+    return Image.fromarray(x)
 
 
 def _depth_to_uint8(depth: torch.Tensor, eps: float = 1e-6) -> np.ndarray:
@@ -50,7 +50,7 @@ def _depth_to_uint8(depth: torch.Tensor, eps: float = 1e-6) -> np.ndarray:
     return u8
 
 def _annotate_depth_u8_with_legend(u8: np.ndarray, d_min: float, d_max: float, unit: str = "m") -> Image.Image:
-    base = Image.fromarray(u8, mode="L").convert("RGB")
+    base = Image.fromarray(u8).convert("RGB")
     W, H = base.size
     draw = ImageDraw.Draw(base)
     try:

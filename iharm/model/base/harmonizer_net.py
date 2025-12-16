@@ -95,7 +95,7 @@ class Harmonize(nn.Module):
     def get_coord(self, x):
         B, _, H, W = x.size()
 
-        coordh, coordw = torch.meshgrid([torch.linspace(-1, 1, H), torch.linspace(-1, 1, W)])
+        coordh, coordw = torch.meshgrid(torch.linspace(-1, 1, H, device=x.device), torch.linspace(-1, 1, W, device=x.device), indexing="ij")
         coordh = coordh.unsqueeze(0).unsqueeze(1).repeat(B, 1, 1, 1).to(x.device)
         coordw = coordw.unsqueeze(0).unsqueeze(1).repeat(B, 1, 1, 1).to(x.device)
 
