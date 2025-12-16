@@ -3,8 +3,6 @@ import torch.nn as nn
 from torch.autograd import Variable
 from typing import Type, Any, Callable, Union, List, Optional
 
-# from config import *
-
 def conv3x3(in_planes, out_planes, stride=1, groups=1, dilation=1):
     """3x3 convolution with padding"""
     return nn.Conv2d(in_planes, out_planes, kernel_size=3, stride=stride,
@@ -211,11 +209,8 @@ class ResNet(nn.Module):
 
 
 def resnet34_mp(**kwargs):
-    r"""ResNet-34 model from
-    `"Deep Residual Learning for Image Recognition" <https://arxiv.org/pdf/1512.03385.pdf>`
-    """
     model = ResNet(BasicBlock, [3, 4, 6, 3], **kwargs)
-    checkpoint = torch.load("./pretrained/r34mp_pretrained_imagenet.pth.tar")
+    checkpoint = torch.load("./pretrained/resnet_pretrained.pth.tar")
     model.load_state_dict(checkpoint)
     return model
 

@@ -6,8 +6,8 @@ import numpy as np
 
 from models.matte_net import AimNet
 from utils.occlusion_composite import depth_aware_composite
-from utils.depthpro import DepthProRunner
-from utils.pctnet_runner import PCTNetRunner
+from utils.depthpro_runner import DepthProRunner
+from utils.harmonizer_runner import HarmonizeRunner
 
 
 def pil_to_tensor(img: Image.Image, size: int) -> torch.Tensor:
@@ -136,9 +136,8 @@ def run_pipeline(
     bg_path,
     device="cuda",
     out_size=512,
-    aim_ckpt="./pretrained/aimnet_pretrained_matting.pth",
-    # matdepth_ckpt="./pretrained/matte_depth_pretrained.pt",
-    pctnet_ckpt="./pretrained/PCTNet_CNN.pt",
+    matte_ckpt="./pretrained/matte_net_pretrained.pth",
+    iharm_ckpt="./pretrained/harmonizer_net_pretrained.pth",
     debug: bool = False,
     out_dir: str = "./samples/output",
     disable_cache: bool = False,
@@ -184,7 +183,7 @@ def run_pipeline(
 
     # GENERATE ALPHA MATTE FOR FOREGROUND
     aim = AimNet()
-    ckpt = torch.load(aim_ckpt, map_location="cpu")
+    ckpt = torch.load(matte_ckpt, map_location="cpu")
     aim.load_state_dict(ckpt["state_dict"], strict=True)
     aim.to(device).eval()
 
@@ -248,34 +247,27 @@ def run_pipeline(
         _tensor_rgb_to_pil(comp).save(debug_dir/f"{prefix}_composite_depthaware.png")
 
 
-    # HARMONIZATION (TODO)
-    # use soft alpha as mask for harmonizer (better than hard threshold)
-    # mask = alpha_pred.clamp(0.0, 1.0)
+    # HARMONIZATION via AICT ViT
+    mask = alpha_pred.clamp(0.0, 1.0)
 
-    # pct = PCTNetRunner(ckpt_path=pctnet_ckpt, device=device)
-    # comp_h_full = pct.run(comp, mask)  # (1,3,768,1024) in [0,1]
+    aict = HarmonizeRunner(ckpt_path=iharm_ckpt, device=device)
+    comp_h = aict.run(comp, mask)
 
-    # if debug:
-    #     _tensor_rgb_to_pil(comp_h_full).save(debug_dir/f"{tag}_harmonized_fullres.png")
+    if debug:
+        _tensor_rgb_to_pil(comp_h).save(debug_dir / f"{prefix}_harmonized_aict.png")
 
-    # resize back to output size for display
-    # comp_h = torch.nn.functional.interpolate(comp_h_full, size=(out_size, out_size), mode="bilinear", align_corners=False)
-
-    # if debug:
-    #     _tensor_rgb_to_pil(comp_h).save(debug_dir / f"{tag}_harmonized_resized.png")
-
-    return _tensor_rgb_to_pil(comp) # comp_h
+    return _tensor_rgb_to_pil(comp_h)
 
 def _parse_args():
     p = argparse.ArgumentParser()
-    p.add_argument("--fg", type=str, default="./samples/foreground2.png", help="Foreground image path")
-    p.add_argument("--bg", type=str, default="./samples/background2.jpg", help="Background image path")
+    p.add_argument("--fg", type=str, default="./samples/foreground3.jpg", help="Foreground image path")
+    p.add_argument("--bg", type=str, default="./samples/background3.jpg", help="Background image path")
     p.add_argument("--device", type=str, default="cuda")
     p.add_argument("--out_size", type=int, default=512)
     p.add_argument("--debug", action="store_true", help="Output the intermediate .npy, depthmap, and alpha mattes for debugging")
     p.add_argument("--disable_cache", action="store_true", help="With this option, the script will avoid reusing depthmaps that have been previously generated. This may considerably slow down things.")
-    p.add_argument("--aim_ckpt", type=str, default="./pretrained/aimnet_pretrained_matting.pth")
-    p.add_argument("--pctnet_ckpt", type=str, default="./pretrained/PCTNet_CNN.pt")
+    p.add_argument("--matte_ckpt", type=str, default="./pretrained/matte_net_pretrained.pth")
+    p.add_argument("--iharm_ckpt", type=str, default="./pretrained/harmonizer_net_pretrained.pth")
     p.add_argument("--out_dir", type=str, default="./samples/output")
     p.add_argument("--out_filename", type=str, help="Optional output filename (otherwise it'll be like <fg>__<bg>_result.png)")
     
@@ -290,8 +282,8 @@ if __name__ == "__main__":
         bg_path=args.bg,
         device=args.device,
         out_size=args.out_size,
-        aim_ckpt=args.aim_ckpt,
-        pctnet_ckpt=args.pctnet_ckpt,
+        matte_ckpt=args.matte_ckpt,
+        iharm_ckpt=args.iharm_ckpt,
         debug=args.debug,
         out_dir=args.out_dir,
         disable_cache=args.disable_cache,

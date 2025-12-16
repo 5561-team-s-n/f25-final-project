@@ -1,100 +1,195 @@
-# models/harmonizer_net.py
+# NOTE: Base iharm folder code from Konstantin Sofiiuk's iDIH code 
+# plus modifications made by Ben Xue's DCCF.
+
 import torch
-import torch.nn as nn
-import torch.nn.functional as F
+from torchvision import transforms
+from functools import partial
+from easydict import EasyDict as edict
+from albumentations import Resize, HorizontalFlip
+from kornia.color import RgbToHsv, HsvToRgb
+from torch.nn import init
+
+from iharm.data.compose import ComposeDatasetUpsample
+from iharm.data.hdataset import HDatasetUpsample
+from iharm.data.transforms import HCompose, RandomCropNoResize
+
+from iharm.model.base.aict_net import Harmonize
+from iharm.model.losses import MaskWeightedMSE, SCS_CR_loss, ColorDistance, CoordDistance
+from iharm.model.metrics import DenormalizedPSNRMetric_FR, DenormalizedMSEMetric_FR
+from iharm.engine.AICT_trainer import Trainer
+from iharm.mconfigs import BMCONFIGS
+from iharm.utils.log import logger
+
+def main(cfg):
+    model, model_cfg, ccfg = init_model()
+    train(model, cfg, model_cfg, ccfg)
 
 
-class ConvBlock(nn.Module):
-    def __init__(self, in_ch, out_ch):
-        super().__init__()
-        self.conv = nn.Sequential(
-            nn.Conv2d(in_ch, out_ch, 3, padding=1),
-            nn.BatchNorm2d(out_ch),
-            nn.ReLU(inplace=True),
-            nn.Conv2d(out_ch, out_ch, 3, padding=1),
-            nn.BatchNorm2d(out_ch),
-            nn.ReLU(inplace=True),
-        )
+def init_func(m, init_gain=0.02): 
+        classname = m.__class__.__name__
+        if hasattr(m, 'weight') and (classname.find('Conv') != -1 or classname.find('Linear') != -1):
+            init.normal_(m.weight.data, 0.0, init_gain)
+            if hasattr(m, 'bias') and m.bias is not None:
+                init.constant_(m.bias.data, 0.0)
+        elif classname.find('BatchNorm2d') != -1: 
+            init.normal_(m.weight.data, 1.0, init_gain)
+            init.constant_(m.bias.data, 0.0)
 
-    def forward(self, x):
-        return self.conv(x)
+def init_model():
+    model_cfg = edict()
+    model_cfg.input_normalization = {
+        'mean': [0, 0, 0],
+        'std': [1, 1, 1]
+    }
 
+    ccfg = BMCONFIGS['ViT_aict']
+    ccfg['params']['input_normalization'] = model_cfg.input_normalization   
+    model = Harmonize(**ccfg['params'])
 
-class HarmonizerNet(nn.Module):
-    """
-    U-Net-like harmonizer.
-    Inputs: composite (3), mask (1), optional depth_bg (1) -> C_in = 4 or 5
-    Output: harmonized composite = composite + residual
-    """
+    model.apply(init_func) 
 
-    def __init__(self, use_depth: bool = False, base_ch: int = 64):
-        super().__init__()
-        self.use_depth = use_depth
-        in_ch = 3 + 1 + (1 if use_depth else 0)
+    input_transform = [transforms.ToTensor()]
+    if ccfg['data']['color_space'] == 'HSV':
+        input_transform.append(RgbToHsv())
+        input_transform.append(transforms.Normalize([0, 0, 0], [6.283, 1, 1]))
+    input_transform.append(transforms.Normalize(model_cfg.input_normalization['mean'], model_cfg.input_normalization['std']))
+    model_cfg.input_transform = transforms.Compose(input_transform)
 
-        # Encoder
-        self.enc1 = ConvBlock(in_ch, base_ch)
-        self.pool1 = nn.MaxPool2d(2)
-        self.enc2 = ConvBlock(base_ch, base_ch * 2)
-        self.pool2 = nn.MaxPool2d(2)
-        self.enc3 = ConvBlock(base_ch * 2, base_ch * 4)
-        self.pool3 = nn.MaxPool2d(2)
-        self.enc4 = ConvBlock(base_ch * 4, base_ch * 8)
-        self.pool4 = nn.MaxPool2d(2)
-        self.bottleneck = ConvBlock(base_ch * 8, base_ch * 16)
+    return model, model_cfg, ccfg
 
-        # Decoder
-        self.up4 = nn.ConvTranspose2d(base_ch * 16, base_ch * 8, 2, stride=2)
-        self.dec4 = ConvBlock(base_ch * 16, base_ch * 8)
-        self.up3 = nn.ConvTranspose2d(base_ch * 8, base_ch * 4, 2, stride=2)
-        self.dec3 = ConvBlock(base_ch * 8, base_ch * 4)
-        self.up2 = nn.ConvTranspose2d(base_ch * 4, base_ch * 2, 2, stride=2)
-        self.dec2 = ConvBlock(base_ch * 4, base_ch * 2)
-        self.up1 = nn.ConvTranspose2d(base_ch * 2, base_ch, 2, stride=2)
-        self.dec1 = ConvBlock(base_ch * 2, base_ch)
+def train(model, cfg, model_cfg, ccfg):
+    cfg.batch_size = 16 if cfg.batch_size < 1 else cfg.batch_size
+    cfg.val_batch_size = cfg.batch_size
 
-        self.out_conv = nn.Conv2d(base_ch, 3, kernel_size=1)
+    cfg.input_normalization = model_cfg.input_normalization
 
-    def forward(self, composite, mask, depth_bg=None):
-        """
-        composite: (B,3,H,W)
-        mask:      (B,1,H,W)
-        depth_bg:  (B,1,H,W) or None
-        """
-        if self.use_depth:
-            assert depth_bg is not None, "use_depth=True but depth_bg is None"
-            x = torch.cat([composite, mask, depth_bg], dim=1)
-        else:
-            x = torch.cat([composite, mask], dim=1)
+    loss_cfg = edict()
+    loss_cfg.pixel_loss = MaskWeightedMSE(min_area=1000, pred_name='images_fullres',
+                                          gt_image_name='target_images_fullres', gt_mask_name='masks_fullres')
+    loss_cfg.pixel_loss_weight = 1.0
 
-        # Encoder
-        e1 = self.enc1(x)
-        p1 = self.pool1(e1)
-        e2 = self.enc2(p1)
-        p2 = self.pool2(e2)
-        e3 = self.enc3(p2)
-        p3 = self.pool3(e3)
-        e4 = self.enc4(p3)
-        p4 = self.pool4(e4)
-        b = self.bottleneck(p4)
+    loss_cfg.low_loss = MaskWeightedMSE(min_area=100, pred_name='images',
+                                        gt_image_name='target_images', gt_mask_name='masks')
+    loss_cfg.low_loss_weight = 0.01
 
-        # Decoder
-        d4 = self.up4(b)
-        d4 = torch.cat([d4, e4], dim=1)
-        d4 = self.dec4(d4)
+    num_epochs = 100
+    low_res_size = (256, 256)
 
-        d3 = self.up3(d4)
-        d3 = torch.cat([d3, e3], dim=1)
-        d3 = self.dec3(d3)
+    train_augmentator_1 = HCompose([
+        RandomCropNoResize(ratio=0.5),
+        HorizontalFlip(),
+    ])
+    train_augmentator_2 = HCompose([
+        Resize(*low_res_size)
+    ])
 
-        d2 = self.up2(d3)
-        d2 = torch.cat([d2, e2], dim=1)
-        d2 = self.dec2(d2)
+    val_augmentator_1 = None
+    val_augmentator_2 = HCompose([
+        Resize(*low_res_size)
+    ])
 
-        d1 = self.up1(d2)
-        d1 = torch.cat([d1, e1], dim=1)
-        d1 = self.dec1(d1)
+    blur = False
+    trainset = ComposeDatasetUpsample(
+        [
+            HDatasetUpsample(cfg.HFLICKR_PATH, split='train', blur_target=blur),
+            HDatasetUpsample(cfg.HDAY2NIGHT_PATH, split='train', blur_target=blur),
+            HDatasetUpsample(cfg.HCOCO_PATH, split='train', blur_target=blur),
+            HDatasetUpsample(cfg.HADOBE5K_2048_PATH, split='train', blur_target=blur),
+            #HDatasetUpsample(cfg.CC_PATH, split='train', blur_target=blur),
+        ],
+        augmentator_1=train_augmentator_1,
+        augmentator_2=train_augmentator_2,
+        input_transform=model_cfg.input_transform,
+        keep_background_prob=0.05,
+        use_hr=True
+    )
 
-        residual = self.out_conv(d1)
-        harmonized = composite + residual
-        return harmonized.clamp(0.0, 1.0)
+    valset = ComposeDatasetUpsample(
+        [
+            HDatasetUpsample(cfg.HFLICKR_PATH, split='test', blur_target=blur, mini_val=False),
+            HDatasetUpsample(cfg.HDAY2NIGHT_PATH, split='test', blur_target=blur, mini_val=False),
+            HDatasetUpsample(cfg.HCOCO_PATH, split='test', blur_target=blur, mini_val=False),
+            HDatasetUpsample(cfg.HADOBE5K_2048_PATH, split='test', blur_target=blur, mini_val=False),
+            #HDatasetUpsample(cfg.CC_PATH, split='test', blur_target=blur, mini_val=False)
+        ],
+        augmentator_1=val_augmentator_1,
+        augmentator_2=val_augmentator_2,
+        input_transform=model_cfg.input_transform,
+        keep_background_prob=-1,
+        use_hr=True
+    )
+
+    optimizer_params = {
+        'lr': cfg.lr,
+        'betas': (0.9, 0.999), 'eps': 1e-8
+    }
+
+    if cfg.local_rank == 0:
+        print(optimizer_params)
+
+    scheduler1 = partial(torch.optim.lr_scheduler.ConstantLR, factor=1)
+    scheduler2 = partial(torch.optim.lr_scheduler.LinearLR, start_factor=1, end_factor=0, total_iters=50)
+    lr_scheduler = lambda optimizer: torch.optim.lr_scheduler.SequentialLR(optimizer, schedulers=[scheduler1(optimizer=optimizer), scheduler2(optimizer=optimizer)], milestones=[50])
+
+    if ccfg['data']['color_space'] == 'HSV':
+        color_transform = transforms.Compose([HsvToRgb(), transforms.Normalize([0, 0, 0], [-6.283, 1, 1])])
+    else:
+        color_transform = None
+
+    def collate_fn_FR(batch):
+        # Initializae dictionary
+        keys = ['images', 'masks', 'target_images', 'images_fullres', 'masks_fullres', 'target_images_fullres',
+                'image_info']
+        bdict = {}
+        for k in keys:
+            bdict[k] = []
+
+        # Create batched dictionary
+        for elem in batch:
+            for key in keys:
+                if key in ['masks', 'masks_fullres']:
+                    elem[key] = torch.tensor(elem[key])
+                bdict[key].append(elem[key])
+
+        bdict['images'] = torch.stack(bdict['images'])
+        bdict['target_images'] = torch.stack(bdict['target_images'])
+        bdict['masks'] = torch.stack(bdict['masks'])
+
+        return bdict
+
+    trainer = Trainer(
+        model, cfg, model_cfg, loss_cfg,
+        trainset, valset,
+        optimizer='adam',
+        optimizer_params=optimizer_params,
+        lr_scheduler=lr_scheduler,
+        metrics=[
+            DenormalizedPSNRMetric_FR(
+                'images_fullres', 'target_images_fullres',
+                mean=torch.tensor(cfg.input_normalization['mean'], dtype=torch.float32).view(1, 3, 1, 1),
+                std=torch.tensor(cfg.input_normalization['std'], dtype=torch.float32).view(1, 3, 1, 1),
+                color_transform=color_transform,
+            ),
+            DenormalizedMSEMetric_FR(
+                'images_fullres', 'target_images_fullres',
+                mean=torch.tensor(cfg.input_normalization['mean'], dtype=torch.float32).view(1, 3, 1, 1),
+                std=torch.tensor(cfg.input_normalization['std'], dtype=torch.float32).view(1, 3, 1, 1),
+                color_transform=color_transform,
+            ),
+        ],
+        checkpoint_interval=50,
+        image_dump_interval=0,
+        color_space=ccfg['data']['color_space'],
+        collate_fn=collate_fn_FR,
+        random_swap=0,
+        random_augment=True
+    )
+
+    start_epoch = trainer.cfg.start_epoch
+    if cfg.local_rank == 0:
+        logger.info(f'Starting Epoch: {start_epoch}')
+        logger.info(f'Total Epochs: {num_epochs}')
+    for epoch in range(start_epoch, num_epochs):
+        trainer.training(epoch)
+        if epoch > 70 or epoch % 10 == 1:
+            trainer.validation(epoch)
