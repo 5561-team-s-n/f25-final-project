@@ -12,12 +12,12 @@ class ViT_Harmonizer(nn.Module):
                 Rearrange('b c (h p1) (w p2) -> b (h w) (p1 p2 c)', p1 = ksize, p2 = ksize),
                 nn.Linear(ksize*ksize*(input_nc+1), dim)
             )
-        self.transformer_enc = nn.TransformerEncoder(nn.TransformerEncoderLayer(dim, nhead=tr_r_enc_head, dim_feedforward=dim*dim_forward, activation=tr_act), num_layers=tr_r_enc_layers)
+        self.transformer_enc = nn.TransformerEncoder(nn.TransformerEncoderLayer(dim, nhead=tr_r_enc_head, dim_feedforward=dim*dim_forward, activation=tr_act, batch_first=True), num_layers=tr_r_enc_layers)
         self.dec = nn.ConvTranspose2d(dim, output_nc, kernel_size=ksize, stride=ksize, padding=0)
 
     def forward(self, inputs, backbone_features=None):
         patch_embedding = self.patch_to_embedding(inputs)
-        content = self.transformer_enc(patch_embedding.permute(1, 0, 2))
+        content = self.transformer_enc(patch_embedding)
         bs, L, C = patch_embedding.size()
         content = content.permute(1, 2, 0).view(bs, C, int(math.sqrt(L)), int(math.sqrt(L)))
         harmonized = self.dec(content)
@@ -34,12 +34,12 @@ class ViT_encoder(nn.Module):
             nn.Linear(ksize * ksize * (input_nc + 1), dim)
         )
         self.transformer_enc = nn.TransformerEncoder(
-            nn.TransformerEncoderLayer(dim, nhead=tr_r_enc_head, dim_feedforward=dim * dim_forward, activation=tr_act),
+            nn.TransformerEncoderLayer(dim, nhead=tr_r_enc_head, dim_feedforward=dim * dim_forward, activation=tr_act, batch_first=True),
             num_layers=tr_r_enc_layers)
 
     def forward(self, inputs, backbone_features=None):
         patch_embedding = self.patch_to_embedding(inputs)  # b (h w) (p1 p2 c)
-        content = self.transformer_enc(patch_embedding.permute(1, 0, 2))
+        content = self.transformer_enc(patch_embedding)
         bs, L, C = patch_embedding.size()
         content = content.permute(1, 2, 0).view(bs, C, int(math.sqrt(L)), int(math.sqrt(L)))
         return [content]
@@ -55,7 +55,7 @@ class ViT_encoder_token(nn.Module):
             nn.Linear(ksize * ksize * (input_nc + 1), dim)
         )
         self.transformer_enc = nn.TransformerEncoder(
-            nn.TransformerEncoderLayer(dim, nhead=tr_r_enc_head, dim_feedforward=dim * dim_forward, activation=tr_act),
+            nn.TransformerEncoderLayer(dim, nhead=tr_r_enc_head, dim_feedforward=dim * dim_forward, activation=tr_act, batch_first=True),
             num_layers=tr_r_enc_layers)
         self.token = nn.Parameter(torch.randn(1, 1, dim))
 
@@ -66,10 +66,10 @@ class ViT_encoder_token(nn.Module):
         x = torch.cat((tokens, patch_embedding), dim=1)  # b, n+1, d
         x = x.permute(1, 0, 2)  # n+1, b, d
 
-        x = self.transformer_enc(x)  # n+1, b, d
-        content = x[1:]  # n, b, d
-        out_tokens = x[1]  # b, d
-        content = content.permute(1, 2, 0).view(b, d, int(math.sqrt(n)), int(math.sqrt(n)))
+        x = self.transformer_enc(x) # b, n+1, d
+        content = x[:, 1:, :] # b, n, d
+        out_tokens = x[:, 0, :] # b, d
+        content = content.permute(0, 2, 1).view(b, d, int(math.sqrt(n)), int(math.sqrt(n)))
         return [content], out_tokens
 
 

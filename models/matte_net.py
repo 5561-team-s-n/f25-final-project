@@ -1,7 +1,6 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-# from config import *
 from utils.matte_util import *
 from models.resnet import *
 
@@ -44,17 +43,15 @@ class PSPModule(nn.Module):
 
     def forward(self, feats):
         h, w = feats.size(2), feats.size(3)
-        priors = [F.upsample(input=stage(feats), size=(h, w), mode='bilinear') for stage in self.stages] + [feats]
+        priors = [F.interpolate(stage(feats), size=(h, w), mode="bilinear") for stage in self.stages] + [feats]
         bottle = self.bottleneck(torch.cat(priors, 1))
         return self.relu(bottle)
 
-class AimNet(nn.Module):
+class MatteNet(nn.Module):
     def __init__(self):
         super().__init__()
         self.resnet = resnet34_mp()
-        ##########################
-        ### Encoder part - RESNET
-        ##########################
+        # Resnet Encoder
         self.encoder0 = nn.Sequential(
             self.resnet.conv1,
             self.resnet.bn1,
@@ -71,9 +68,7 @@ class AimNet(nn.Module):
         self.mp3 = self.resnet.maxpool4
         self.encoder4 = self.resnet.layer4
         self.mp4 = self.resnet.maxpool5
-        ##########################
-        ### Decoder part - GLOBAL
-        ##########################
+        # Decoder
         self.psp_module = PSPModule(512, 512, (1, 3, 5))
         self.psp4 = conv_up_psp(512, 256, 2)
         self.psp3 = conv_up_psp(512, 128, 4)
@@ -138,9 +133,7 @@ class AimNet(nn.Module):
         self.decoder0_g_spatial = nn.Conv2d(2,1,7,padding=3)
         self.decoder0_g_se = SELayer(64)
         self.decoder_final_g = nn.Conv2d(64,3,3,padding=1)
-        ##########################
-        ### Decoder part - LOCAL
-        ##########################
+        # Decoder
         self.bridge_block = nn.Sequential(
             nn.Conv2d(512,512,3,dilation=2, padding=2),
             nn.BatchNorm2d(512),
@@ -204,9 +197,7 @@ class AimNet(nn.Module):
         
     def forward(self, input):
 
-        #####################################
-        ### Encoder part - MODIFIED RESNET
-        #####################################
+        # Resnet Encoder
         e0 = self.encoder0(input)
         e0p, id0 = self.mp0(e0)
         e1p, id1 = self.mp1(e0p)
@@ -217,9 +208,7 @@ class AimNet(nn.Module):
         e3 = self.encoder3(e3p)
         e4p, id4 = self.mp4(e3)
         e4 = self.encoder4(e4p)
-        #####################################
-        ### Decoder part - GLOBAL: Semantic
-        #####################################
+        # Global Decoder
         psp = self.psp_module(e4)
         d4_g = self.decoder4_g(torch.cat((psp,e4),1))
         d4_g = self.decoder4_g_se(d4_g)
@@ -238,9 +227,7 @@ class AimNet(nn.Module):
         d0_g = self.decoder0_g_se(d0_g)
         d0_g = self.decoder_final_g(d0_g)
         global_sigmoid = F.sigmoid(d0_g)
-        #####################################
-        ### Decoder part - LOCAL: Matting
-        #####################################
+        # Local Decoder
         bb = self.bridge_block(e4)
         d4_l = self.decoder4_l(torch.cat((bb, e4),1))
         d3_l = F.max_unpool2d(d4_l, id4, kernel_size=2, stride=2)
@@ -255,8 +242,6 @@ class AimNet(nn.Module):
         d0_l = d0_l+d0_l*d0_g_spatial_sigmoid
         d0_l = self.decoder_final_l(d0_l)
         local_sigmoid = F.sigmoid(d0_l)
-        ##########################
-        ### Fusion net - G/L
-        ##########################
+
         fusion_sigmoid = get_masked_local_from_global(global_sigmoid, local_sigmoid)
         return global_sigmoid, local_sigmoid, fusion_sigmoid

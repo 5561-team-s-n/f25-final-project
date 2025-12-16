@@ -1,5 +1,3 @@
-import cv2
-import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -9,10 +7,6 @@ from iharm.model.base.ssam_model import SpatialSeparatedAttention
 from iharm.model.modeling.conv_autoencoder import ConvEncoder, DeconvDecoderUpsample
 from iharm.model.modeling.unet import UNetEncoder, UNetDecoderUpsample
 from iharm.model.modeling.vit_base import ViT_encoder, ViT_decoder
-import matplotlib.pyplot as plt
-
-
-# cascade 0830
 
 class Harmonize(nn.Module):
 
@@ -101,7 +95,7 @@ class Harmonize(nn.Module):
     def get_coord(self, x):
         B, _, H, W = x.size()
 
-        coordh, coordw = torch.meshgrid([torch.linspace(-1, 1, H), torch.linspace(-1, 1, W)])
+        coordh, coordw = torch.meshgrid(torch.linspace(-1, 1, H, device=x.device), torch.linspace(-1, 1, W, device=x.device), indexing="ij")
         coordh = coordh.unsqueeze(0).unsqueeze(1).repeat(B, 1, 1, 1).to(x.device)
         coordw = coordw.unsqueeze(0).unsqueeze(1).repeat(B, 1, 1, 1).to(x.device)
 
