@@ -270,7 +270,6 @@ def run_pipeline(
     debug: bool = False,
     matteformer_disable: bool = False,
     matteformer_ckpt="./pretrained/matteformer_pretrained_1k.pth",
-    matteformer_config="./config/MatteFormer_COmposition1k.toml",
     out_dir: str = "./samples/output",
     disable_cache: bool = False,
 ):
@@ -328,11 +327,11 @@ def run_pipeline(
     #add matteformer
     #--------------
 
-    if matteformer_ckpt and matteformer_config and not matteformer_disable:
+    if matteformer_ckpt and not matteformer_disable:
         if debug: print("Running MatteFormer Refinement...")
         
         # Load Config
-        with open(matteformer_config, encoding="utf-8") as f:
+        with open("./config/MatteFormer_Composition1k.toml", encoding="utf-8") as f:
             utils.load_config(toml.load(f))
         
         # Build Model
