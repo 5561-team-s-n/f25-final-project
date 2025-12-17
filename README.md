@@ -43,10 +43,3 @@ As mentioned above, if running the program on a new foreground and background, e
 # Acknowledgments
 - Some utilities for training / losses of the image harmonization step use code from DCCF by [Xue et. al.](https://github.com/rockeyben/DCCF) which is present in the `iharm/` folder. 
 - Some Matteformer utilities present in `utils/` and `networks/` comes from [Park et. al.](https://github.com/webtoon/matteformer) 
-
-TODO:
-- [ ] Writing report -- datasets used were AIM500 for training mattenet, iHarmony for training image harmonizer. Both were used as foregrounds/backgrounds in samples
-- [ ] We need metrics and to be able to test this on a bunch of different images
-- [ ] README needs to be created, and we need to test that requirements.txt works properly
-- [ ] (John) Add timing code with tqdm, deal with python warnings
-- [ ] (John) Some way of specifying the amount to shift the foreground in the composite on the commandline? Currently you have to do it manually in occlusion_composite.py
