@@ -1,5 +1,7 @@
 import os
+
 import cv2
+
 import numpy as np
 from   utils import compute_sad_loss, compute_mse_loss
 import argparse
