@@ -40,6 +40,16 @@ Notes:
 
 As mentioned above, if running the program on a new foreground and background, everything should take about 1-2 minutes to complete. But thereafter depthmaps will be cached and runs should only take about 10 seconds.    
 
+Here are some runs that re-generate results in our paper: 
+```sh
+python pipeline_demo.py # Hooked up by default to generate pineapple behind pumpkins 
+python pipeline_demo.py --fg ./samples/fg2.png --bg ./samples/bg6.png --depth_shift 0.0 # Dog in front of girl
+python pipeline_demo.py --fg ./samples/fg6.png --bg ./samples/bg7.jpg --depth_shift 1.0 # Flowers
+python pipeline_demo.py --fg ./samples/fg2.png --bg ./samples/bg2.jpg --depth_shift 1.5 # Dog underwater w/ smooth composite
+python pipeline_demo.py --fg ./samples/fg8.png --bg ./samples/bg4.png --depth_shift 1.0 # Horse in bushes
+# Pass --debug to get intermediate pipeline steps too. 
+```
+
 # Acknowledgments
 - Some utilities for training / losses of the image harmonization step use code from DCCF by [Xue et. al.](https://github.com/rockeyben/DCCF) which is present in the `iharm/` folder. 
 - Some Matteformer utilities present in `utils/` and `networks/` comes from [Park et. al.](https://github.com/webtoon/matteformer) 
