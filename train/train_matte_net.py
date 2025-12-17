@@ -1,14 +1,3 @@
-"""
-Deep Automatic Natural Image Matting [IJCAI-21]
-Main train file.
-
-Copyright (c) 2021, Jizhizi Li (jili8515@uni.sydney.edu.au)
-Licensed under the MIT License (see LICENSE for details)
-Github repo: https://github.com/JizhiziLi/AIM
-Paper link : https://www.ijcai.org/proceedings/2021/111
-
-"""
-
 import argparse
 import torch
 import torch.nn as nn
@@ -16,21 +5,11 @@ import torch.optim as optim
 from torch.autograd import Variable
 from torch.utils.data import DataLoader
 import logging
-import numpy as np
-import datetime{}
 import time
 from config import *
-from util import *
-from evaluate import *
-from network.AimNet import AimNet
-from data import LoadDataset, DatasetTransform
 
-######### Parsing arguments ######### 
 def get_args():
 	parser = argparse.ArgumentParser(description='Arguments for the training purpose.')
-	# train_data: choose either sod or matting as the training data.
-	# model_save_dir: path to save the last checkpoint
-	# logname: name of the logging files
 	parser.add_argument('--logname', type=str, default='train_log', help="name of the logging file")
 	parser.add_argument('--gpuNums', type=int, default=1, help='number of gpus')
 	parser.add_argument('--batchSize', type=int, default=16, help='training batch size')

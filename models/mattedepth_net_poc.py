@@ -44,7 +44,6 @@ class UpBlock(nn.Module):
 
     def forward(self, x, skip):
         x = self.up(x)
-        # in case of small off-by-one, center crop skip
         if x.shape[-2:] != skip.shape[-2:]:
             dh = skip.shape[-2] - x.shape[-2]
             dw = skip.shape[-1] - x.shape[-1]
@@ -56,7 +55,6 @@ class UpBlock(nn.Module):
 class DecoderHead(nn.Module):
     def __init__(self, out_channels: int = 1):
         super().__init__()
-        # encoder channels: [64, 128, 256, 512]
         self.up3 = UpBlock(512, 256, 256)
         self.up2 = UpBlock(256, 128, 128)
         self.up1 = UpBlock(128, 64, 64)
@@ -85,5 +83,4 @@ class MatDepthNet(nn.Module):
         alpha = self.alpha_head(feats, (h, w))
         depth = self.depth_head(feats, (h, w))
         alpha = torch.sigmoid(alpha)  # [0,1]
-        # depth is linear (will be normalized against teacher)
         return alpha, depth
